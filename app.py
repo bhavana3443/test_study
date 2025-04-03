@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 import time
 import requests
-Hello
 # API keys
 openai.api_key = "openai"
 DEEPSEEK_API_KEY = "deepseek"  # Replace with your DeepSeek API key
@@ -17,6 +16,85 @@ DEEPSEEK_API_KEY = "deepseek"  # Replace with your DeepSeek API key
 ###医学知識###
 # 症状リスト
 columns_dictionary_1 = '[胸痛, 呼吸困難, 腹痛, 発熱, めまい, 頭痛, 意識障害, 動悸, けいれん, 吐血, 下血, 血尿, 腰痛, 背部痛, 浮腫, 発疹, 関節痛, 四肢のしびれ, 四肢の麻痺, 外傷, 不眠', '鼻汁','咽頭痛', '咳嗽','倦怠感]'
+
+# 腹痛のステップ定義
+STOMACH_PAIN_STEPS = {
+    1: "location",      # 部位の確認
+    2: "character",     # 痛みの性質
+    3: "intensity",     # 痛みの強さ
+    4: "duration",      # 持続時間
+    5: "associated",    # 随伴症状
+    6: "aggravating",   # 増悪因子
+    7: "relieving"      # 緩和因子
+}
+
+# 腹痛の詳細カテゴリ
+stomach_pain_categories = {
+    "location": {
+        "上腹部": ["胃", "十二指腸", "膵臓"],
+        "右上腹部": ["肝臓", "胆嚢", "胆管"],
+        "左上腹部": ["脾臓", "膵臓", "胃"],
+        "臍周囲": ["小腸", "大腸"],
+        "下腹部": ["大腸", "膀胱", "子宮"],
+        "右下腹部": ["虫垂", "大腸", "卵巣"],
+        "左下腹部": ["大腸", "卵巣", "尿管"],
+        "全腹部": ["腹膜炎", "腸閉塞", "消化管穿孔"]
+    },
+    "character": {
+        "鋭い痛み": ["虫垂炎", "胆嚢炎", "消化管穿孔"],
+        "鈍い痛み": ["胃炎", "腸炎", "便秘"],
+        "差し込むような痛み": ["尿管結石", "胆石", "腸閉塞"],
+        "焼けるような痛み": ["胃潰瘍", "十二指腸潰瘍", "逆流性食道炎"],
+        "疝痛": ["腸閉塞", "胆石", "尿管結石"],
+        "圧迫感": ["胃炎", "胃潰瘍", "機能性ディスペプシア"]
+    },
+    "intensity": {
+        "軽度": ["日常生活に支障なし"],
+        "中等度": ["日常生活に支障あり"],
+        "重度": ["動けないほどの痛み"],
+        "最重度": ["意識が遠のくほどの痛み"]
+    },
+    "duration": {
+        "急性": ["突然の痛み", "数時間以内の発症"],
+        "亜急性": ["数日以内の発症"],
+        "慢性": ["数週間以上続く痛み"]
+    },
+    "associated": {
+        "発熱": ["感染症", "炎症"],
+        "嘔吐": ["消化管疾患", "腸閉塞"],
+        "下痢": ["感染性腸炎", "過敏性腸症候群"],
+        "便秘": ["腸閉塞", "過敏性腸症候群"],
+        "血便": ["消化管出血", "炎症性腸疾患"],
+        "黄疸": ["胆道疾患", "肝疾患"],
+        "食欲不振": ["胃炎", "胃潰瘍", "肝炎"]
+    },
+    "aggravating": {
+        "食事後": ["胃炎", "胃潰瘍", "胆嚢炎"],
+        "運動時": ["腸閉塞", "腸捻転"],
+        "夜間": ["十二指腸潰瘍", "胆石"],
+        "ストレス": ["機能性ディスペプシア", "過敏性腸症候群"],
+        "特定の食品": ["食物アレルギー", "不耐症"]
+    },
+    "relieving": {
+        "安静": ["腸閉塞", "腹膜炎"],
+        "食事制限": ["胃炎", "胃潰瘍"],
+        "薬物": ["胃酸分泌抑制薬", "鎮痛薬"],
+        "排便": ["便秘", "過敏性腸症候群"],
+        "姿勢": ["逆流性食道炎", "胃下垂"]
+    }
+}
+
+# 腹痛の質問リスト
+stomach_pain_questions = {
+    "location": "お腹のどの部分が痛みますか？",
+    "character": "痛みの感じ方を教えてください。",
+    "intensity": "痛みの強さはどのくらいですか？",
+    "duration": "痛みはいつから始まりましたか？",
+    "associated": "他に気になる症状はありますか？",
+    "aggravating": "どのような時に痛みが強くなりますか？",
+    "relieving": "どのような時に痛みが和らぎますか？"
+}
+
 # 追加質問リスト
 next_question_map = {
     "腹痛": {
@@ -826,6 +904,36 @@ def hospital_saku_decision(summary, depertment_assessement):
 '''
     return chat_with_model(prompt, model=st.session_state["selected_model"], temperature=0)
 
+# 腹痛の詳細分析（ステップごと）
+def analyze_stomach_pain_step(patient_comment, current_step):
+    category = STOMACH_PAIN_STEPS[current_step]
+    options = list(stomach_pain_categories[category].keys())
+    
+    prompt = f"""
+    患者の発言から腹痛の{category}に関する情報を分析してください。
+    
+    患者の発言: {patient_comment}
+    
+    選択肢:
+    {', '.join(options)}
+    
+    制約:
+    - 上記の選択肢から最も適切なものを1つ選んでください
+    - 該当する選択肢がない場合は「不明」と回答してください
+    - 選択肢以外の回答はしないでください
+    """
+    
+    response = chat_with_model(prompt, model=st.session_state["selected_model"], temperature=0)
+    return response.strip()
+
+# 腹痛の総合分析
+def analyze_stomach_pain(patient_comment):
+    results = {}
+    for step_num, category in STOMACH_PAIN_STEPS.items():
+        result = analyze_stomach_pain_step(patient_comment, step_num)
+        results[category] = result
+    return results
+
 ###メイン処理###
 
 
@@ -1010,19 +1118,7 @@ def main():
             # ---------------------------------------------------
             st.session_state["patients_first_comment"] = user_input
 
-            # 次のアシスタントメッセージを追加
-            assistant_text = (
-                "ありがとうございます。\n"
-                "次に、記載された症状について追加で質問をさせていただきます。\n"
-                "少しお待ちください。"
-            )
-            st.session_state["messages"].append({
-                "role": "assistant",
-                "content": assistant_text,
-                "typed": False
-            })
-
-            # case_dict, symptom_dictionary を生成
+            # 症状の分析とカテゴリ確認
             result = make_question_and_dictionary(
                 patients_comment=user_input,
                 columns_dictionary=columns_dictionary_1
@@ -1033,6 +1129,40 @@ def main():
                 return
                 
             case_dict, symptom_dictionary = result
+            
+            # 検出された症状を表示して確認
+            detected_symptoms = [symptom for symptom, value in symptom_dictionary.items() if value == 1]
+            if detected_symptoms:
+                confirmation_text = "以下の症状をお持ちですね？\n"
+                for i, symptom in enumerate(detected_symptoms, 1):
+                    confirmation_text += f"{i}. {symptom}\n"
+                
+                # 各症状に対する追加質問を表示
+                confirmation_text += "\nより詳しく症状を把握するために、以下の質問に答えていただけますか？\n"
+                
+                # 症状ごとの質問を追加
+                for i, symptom in enumerate(detected_symptoms, 1):
+                    if symptom in next_question_map:
+                        questions = next_question_map[symptom][1]  # 1は質問リストのインデックス
+                        confirmation_text += f"\n{symptom}について：\n"
+                        for j, question in enumerate(questions, 1):
+                            confirmation_text += f"  {j}. {question}\n"
+                
+                st.session_state["messages"].append({
+                    "role": "assistant",
+                    "content": confirmation_text,
+                    "typed": False
+                })
+            else:
+                st.session_state["messages"].append({
+                    "role": "assistant",
+                    "content": "申し訳ありませんが、具体的な症状を検出できませんでした。もう少し詳しく症状を説明していただけますか？",
+                    "typed": False
+                })
+                st.session_state.step = 1
+                st.rerun()
+                return
+
             st.session_state["case_dict"] = case_dict
             st.session_state["symptom_dictionary"] = symptom_dictionary
 
@@ -1040,7 +1170,7 @@ def main():
             if case_dict:
                 st.session_state.messages.append({
                     "role": "assistant",
-                    "content": f"あなたの発言をもとに問診票を作成しました。\n{json.dumps(case_dict, ensure_ascii=False, indent=2)}"
+                    "content": "症状の分析が完了しました。次の質問に進みましょう。"
                 })
             else:
                 st.session_state.messages.append({
